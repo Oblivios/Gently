@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gently"
+version = "0.1.0"
+description = "Local dark-theme console for Claude/Codex/Gemini session history (and soon: tmux jobs, monitoring, active prompting)."
+requires-python = ">=3.9"
+dependencies = []
+readme = { text = "See app.py for usage: `python3 app.py`.", content-type = "text/plain" }
+
+[project.scripts]
+gently = "gently.server:main"
+
+[tool.setuptools]
+py-modules = ["app"]
+packages = ["gently", "gently.providers"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = ["static/*", "static/**/*"]
