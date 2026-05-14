@@ -8,7 +8,11 @@ Resume or start sessions live, and run multiple agents in parallel across a spli
 
 Works on Linux & WSL (Ubuntu), not tested on macOS.
 
-<video src="./screens/gently-demo.mp4" controls autoplay muted loop width="700"></video>
+<p align="center">
+  <img src="./screens/gently-demo.webp" width="700" alt="Gently demo">
+</p>
+
+[Open MP4 demo](./screens/gently-demo.mp4)
 
 ## Run
 
