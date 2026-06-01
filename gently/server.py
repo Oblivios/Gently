@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -34,6 +37,117 @@ from .util import safe_id
 # Repo root (the folder that contains `app.py`, `static/`, `gently/`).
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
+
+# ---- remote access control -----------------------------------------------
+
+# Configured by --view-only / --view-all / --trust flags. "trust" = full
+# access (default, backwards-compatible). Changed by main() before serving.
+_remote_level: str = "trust"  # "view-only" | "view-all" | "trust"
+
+# Shared view: the owner's currently-open sessions, pushed by their browser.
+# Consumed by view-only clients so they see exactly what the owner has open.
+# In-memory only — lost on server restart.
+_shared_view: dict = {}
+_shared_view_lock = threading.Lock()
+_shared_view_ts: float = 0.0
+
+
+def _own_ips() -> frozenset[str]:
+    """All IP addresses that belong to this machine (cached on first call)."""
+    ips: set[str] = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+    # All IPs the OS has registered for this hostname.
+    try:
+        _, _, addrs = socket.gethostbyname_ex(socket.gethostname())
+        ips.update(addrs)
+    except OSError:
+        pass
+
+    # Outbound interface trick: find the LAN IP used to reach the internet
+    # without actually sending any packets.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ips.add(s.getsockname()[0])
+    except OSError:
+        pass
+
+    return frozenset(ips)
+
+
+_OWN_IPS: frozenset[str] = _own_ips()
+
+# ---- owner auth cookie -------------------------------------------------------
+# When access control is active (--view-only / --view-all), we issue a
+# persistent cookie to the operator so they keep owner-level access regardless
+# of which IP their browser connects from. This is the only reliable way to
+# distinguish "the person who started Gently on WSL2 and opened it via their
+# Windows browser through localhost port-forwarding" from "a phone on the LAN".
+#
+# The token is 48 hex chars stored in ~/.config/gently/owner.key (mode 0o600).
+# It is never sent to remote clients; they only get it via the /?_auth= URL
+# shown in the TUI. Requests with a valid gently_auth cookie are treated as
+# owner regardless of IP.
+
+_COOKIE_NAME = "gently_auth"
+_OWNER_TOKEN: str = ""   # empty = access control inactive; set by serve()
+
+
+def _token_path() -> Path:
+    cfg = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    return cfg / "gently" / "owner.key"
+
+
+def _load_or_create_token() -> str:
+    tp = _token_path()
+    try:
+        t = tp.read_text().strip()
+        if len(t) == 48:
+            return t
+    except OSError:
+        pass
+    t = secrets.token_hex(24)
+    try:
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tp.write_text(t)
+        tp.chmod(0o600)
+    except OSError:
+        pass
+    return t
+
+
+def _client_level(client_ip: str) -> str:
+    """'owner', 'view-only', 'view-all', or 'trust' based on requesting IP.
+
+    Localhost AND the machine's own LAN IP(s) are always treated as owner so
+    the person running Gently never loses access when they open the UI via the
+    LAN address (e.g. http://192.168.x.x:8765) alongside --view-only / --view-all.
+    """
+    try:
+        if ipaddress.ip_address(client_ip).is_loopback:
+            return "owner"
+    except ValueError:
+        pass
+    if client_ip in _OWN_IPS:
+        return "owner"
+    return _remote_level
+
+
+def _request_level(handler: BaseHTTPRequestHandler) -> str:
+    """Return the access level for an incoming request.
+
+    Cookie check takes priority over IP so that the operator's browser (which
+    may connect through WSL2 port-forwarding or a VPN and thus appear as a
+    non-loopback IP) is always recognised as owner after the one-time auth
+    URL visit.
+    """
+    if _OWNER_TOKEN:
+        cookie_header = handler.headers.get("Cookie", "")
+        for part in cookie_header.split(";"):
+            name, _, val = part.strip().partition("=")
+            if name.strip() == _COOKIE_NAME and val.strip() == _OWNER_TOKEN:
+                return "owner"
+    return _client_level(handler.client_address[0])
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
@@ -99,6 +213,36 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/tmux/stream":
                 return self._tmux_stream(qs)
 
+            # ---- owner auth handshake ----------------------------------------
+            # Opening /?_auth=<token> in any browser sets the owner cookie and
+            # redirects to / — lets the operator authenticate from any device.
+            if path in ("", "/") and qs.get("_auth"):
+                candidate = (qs["_auth"][0] or "").strip()
+                if _OWNER_TOKEN and candidate == _OWNER_TOKEN:
+                    body = b"Redirecting..."
+                    self.send_response(302)
+                    self.send_header("Location", "/")
+                    self.send_header(
+                        "Set-Cookie",
+                        f"{_COOKIE_NAME}={_OWNER_TOKEN}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax",
+                    )
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                # Wrong token — just serve the page normally (no silent error).
+
+            if path == "/api/access":
+                level = _request_level(self)
+                return _json(self, 200, {"level": level})
+
+            if path == "/api/shared-view":
+                with _shared_view_lock:
+                    return _json(self, 200, {
+                        "sessions": _shared_view.get("sessions", []),
+                        "ts": _shared_view_ts,
+                    })
+
             if path == "/api/workspaces":
                 return _json(self, 200, {"workspaces": ws_store.list_workspaces()})
             m = re.fullmatch(r"/api/workspaces/([^/]+)", path)
@@ -114,6 +258,19 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, 200, data)
 
             if path == "/api/sessions":
+                level = _request_level(self)
+                if level == "view-only":
+                    # Return only the sessions currently open in the owner's workspace.
+                    with _shared_view_lock:
+                        results = list(_shared_view.get("sessions", []))
+                    q = (qs.get("q", [""])[0] or "").strip().lower()
+                    if q:
+                        results = [
+                            s for s in results
+                            if q in (s.get("summary") or "").lower()
+                            or q in (s.get("session_id") or "").lower()
+                        ]
+                    return _json(self, 200, {"results": results})
                 q = (qs.get("q", [""])[0] or "").strip()
                 providers = _parse_providers(qs) or set(PROVIDERS.keys())
                 return _json(self, 200, {"results": search_sessions(q, providers)})
@@ -181,6 +338,12 @@ class Handler(BaseHTTPRequestHandler):
                     data = json.loads(body.decode("utf-8"))
                 except Exception:
                     return _json(self, 400, {"error": "invalid_json"})
+
+            level = _request_level(self)
+            # view-only and view-all users may not perform any write operations.
+            # The /api/shared-view POST is owner-only and handled further down.
+            if level in ("view-only", "view-all") and path != "/api/shared-view":
+                return _json(self, 403, {"error": "read_only"})
 
             if path == "/api/tmux/start":
                 provider = str(data.get("provider") or "").strip().lower()
@@ -294,6 +457,19 @@ class Handler(BaseHTTPRequestHandler):
                 ok = ws_store.delete_workspace(name)
                 return _json(self, 200 if ok else 404, {"ok": ok})
 
+            if path == "/api/shared-view":
+                # Only the owner may push the shared view.
+                if _request_level(self) != "owner":
+                    return _json(self, 403, {"error": "owner_only"})
+                global _shared_view, _shared_view_ts
+                sessions = data.get("sessions")
+                if not isinstance(sessions, list):
+                    return _json(self, 400, {"error": "sessions_must_be_list"})
+                with _shared_view_lock:
+                    _shared_view = {"sessions": sessions}
+                    _shared_view_ts = time.time()
+                return _json(self, 200, {"ok": True})
+
             return _json(self, 404, {"error": "not_found"})
         except BrokenPipeError:
             return
@@ -379,13 +555,24 @@ def _print_plain_banner(url: str) -> None:
         print(f"  {marker} {name:<7} {d}")
 
 
-def serve(host: str, port: int, open_browser: bool, use_tui: bool) -> None:
+def serve(host: str, port: int, open_browser: bool, use_tui: bool, remote_level: str = "trust") -> None:
+    global _remote_level, _OWNER_TOKEN
+    _remote_level = remote_level
     tmux_manager.recover()
     server = ThreadingHTTPServer((host, port), Handler)
-    url = f"http://{host if host != '0.0.0.0' else '127.0.0.1'}:{port}"
+    base_url = f"http://{host if host != '0.0.0.0' else '127.0.0.1'}:{port}"
+
+    # Load (or create) the owner token whenever access control is active so
+    # the operator can authenticate from any device via the /?_auth= URL.
+    auth_url: str | None = None
+    if remote_level != "trust":
+        _OWNER_TOKEN = _load_or_create_token()
+        auth_url = f"{base_url}/?_auth={_OWNER_TOKEN}"
+
+    open_url = auth_url or base_url
 
     if open_browser:
-        threading.Timer(0.4, lambda: webbrowser.open_new_tab(url)).start()
+        threading.Timer(0.4, lambda: webbrowser.open_new_tab(open_url)).start()
 
     if use_tui:
         # Serve in a daemon thread so the TUI can own the foreground. Daemon
@@ -396,7 +583,7 @@ def serve(host: str, port: int, open_browser: bool, use_tui: bool) -> None:
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
         try:
-            run_tui(url)
+            run_tui(base_url, auth_url=auth_url)
         finally:
             try:
                 server.server_close()
@@ -404,7 +591,9 @@ def serve(host: str, port: int, open_browser: bool, use_tui: bool) -> None:
                 pass
         return
 
-    _print_plain_banner(url)
+    _print_plain_banner(base_url)
+    if auth_url:
+        print(f"\n  Owner auth URL (open once to stay authenticated):\n  {auth_url}\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -433,6 +622,19 @@ def main(argv: list[str] | None = None) -> int:
         "--tmux-reset", action="store_true",
         help="kill every gently_* tmux session + clean up logs/sidecars, then exit",
     )
+    remote_group = parser.add_mutually_exclusive_group()
+    remote_group.add_argument(
+        "--view-only", action="store_true",
+        help="Remote (non-localhost) users get view-only access to currently-open sessions",
+    )
+    remote_group.add_argument(
+        "--view-all", action="store_true",
+        help="Remote users can browse all sessions read-only but cannot interact",
+    )
+    remote_group.add_argument(
+        "--trust", action="store_true",
+        help="Remote users get full access (default when no flag is given)",
+    )
     args = parser.parse_args(argv)
 
     if args.tmux_reset:
@@ -460,7 +662,14 @@ def main(argv: list[str] | None = None) -> int:
         # otherwise (pipes, redirects, docker logs, CI, ...).
         args.tui = sys.stdout.isatty()
 
-    serve(args.host, args.port, open_browser=args.open, use_tui=args.tui)
+    if args.view_only:
+        remote_level = "view-only"
+    elif args.view_all:
+        remote_level = "view-all"
+    else:
+        remote_level = "trust"  # default: full access (backwards-compatible)
+
+    serve(args.host, args.port, open_browser=args.open, use_tui=args.tui, remote_level=remote_level)
     return 0
 
 

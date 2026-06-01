@@ -1,7 +1,7 @@
 // Per-tab lifecycle: initial load, "load earlier" window extension, and the
 // polling loop that appends new messages as they appear in the session file.
 
-import { api, state, runtime, POLL_MS, INITIAL_WINDOW, EARLIER_WINDOW, toast } from "./state.js";
+import { api, state, runtime, POLL_MS, INITIAL_WINDOW, EARLIER_WINDOW, toast, getLabelOverride } from "./state.js";
 import { isNearBottom } from "./util.js";
 import { appendMessagesTo } from "./messages.js";
 import { renderPaneBody, renderPaneHeader, applyExpandedState } from "./render.js";
@@ -24,7 +24,10 @@ export async function ensureTabLoaded(pane, tab) {
     const data = await api(`/api/sessions/${tab.provider}/${tab.sessionId}?limit=${INITIAL_WINDOW}`);
     if (tab._seq !== seq) return;
     tab.project = data.project || tab.project;
-    tab.label = data.summary || tab.label;
+    // Don't overwrite a user-set rename with the server's summary.
+    if (!getLabelOverride(tab.provider, tab.sessionId)) {
+      tab.label = data.summary || tab.label;
+    }
     tab.items = data.items || [];
     tab.start = data.start ?? 0;
     tab.end = data.end ?? tab.items.length;

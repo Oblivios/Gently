@@ -111,6 +111,7 @@ export const state = {
   groupMode: restoreGroupMode(),       // "recency" | "project"
   groupCollapsed: restoreCollapsed(),  // Set<projectKey> — collapsed groups
   labelOverrides: restoreLabelOverrides(), // { "provider:sid": custom label }
+  accessLevel: "owner",  // "owner" | "trust" | "view-all" | "view-only"
 };
 
 // Transient per-pane runtime state — timers, DOM refs, xterm/EventSource

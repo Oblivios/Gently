@@ -8,7 +8,7 @@ import { toast } from "./state.js";
 import {
   walkPanes, findPane, firstPaneIn, findParentSplit, replaceNode,
   makePane, makeSplit, persistWorkspace, disposePaneRuntime, swapPanes,
-  activeTabTerminal,
+  activeTabTerminal, moveTabToPane,
 } from "./workspace.js";
 import { appendMessagesTo } from "./messages.js";
 import { buildMarkdownExport } from "./export.js";
@@ -296,13 +296,15 @@ function renderPaneElement(pane) {
   root.addEventListener("pointerdown", () => focusPane(pane.id));
 
   // ---- drag & drop: this pane is a drop target ---------------------------
-  // Drop effect: move. We accept only our own custom MIME, so unrelated
+  // Drop effect: move. We accept only our own custom MIMEs, so unrelated
   // drags (files, text) don't show fake drop affordance.
   root.addEventListener("dragover", (e) => {
-    if (!e.dataTransfer?.types?.includes("text/gently-pane")) return;
+    const hasPaneDrag = e.dataTransfer?.types?.includes("text/gently-pane");
+    const hasTabDrag  = e.dataTransfer?.types?.includes("text/gently-tab");
+    if (!hasPaneDrag && !hasTabDrag) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    if (root.classList.contains("dragging")) return;  // don't highlight self
+    if (root.classList.contains("dragging")) return;  // don't highlight self during pane drag
     root.classList.add("drop-target");
   });
   root.addEventListener("dragleave", (e) => {
@@ -313,12 +315,29 @@ function renderPaneElement(pane) {
     }
   });
   root.addEventListener("drop", (e) => {
-    if (!e.dataTransfer?.types?.includes("text/gently-pane")) return;
     e.preventDefault();
     root.classList.remove("drop-target");
-    const srcId = e.dataTransfer.getData("text/gently-pane");
-    if (!srcId || srcId === pane.id) return;
-    swapPanes(srcId, pane.id);
+    if (e.dataTransfer?.types?.includes("text/gently-pane")) {
+      const srcId = e.dataTransfer.getData("text/gently-pane");
+      if (!srcId || srcId === pane.id) return;
+      swapPanes(srcId, pane.id);
+    } else if (e.dataTransfer?.types?.includes("text/gently-tab")) {
+      let payload;
+      try { payload = JSON.parse(e.dataTransfer.getData("text/gently-tab")); } catch { return; }
+      const { tabId, fromPaneId } = payload || {};
+      if (!tabId || !fromPaneId || fromPaneId === pane.id) return;
+      const fromPane = findPane(state.workspace.root, fromPaneId);
+      if (!fromPane) return;
+      if (moveTabToPane(fromPaneId, tabId, pane.id)) {
+        // Re-render both affected panes in-place.
+        renderPane(fromPane);
+        renderPane(pane);
+        // Kick off loading for the newly arrived tab if needed.
+        const tab = pane.tabs.find(t => t.id === tabId);
+        if (tab && !tab.loaded) ensureTabLoaded(pane, tab);
+        else schedulePaneLoop(pane);
+      }
+    }
   });
 
   root.appendChild(renderPaneHeaderElement(pane));
@@ -360,9 +379,9 @@ function renderPaneHeaderElement(pane) {
 
   // ---- drag source -------------------------------------------------------
   header.addEventListener("dragstart", (e) => {
-    // Don't hijack clicks on tabs or control buttons — users who meant to
-    // click the close-tab X or a pane-btn should still get the click.
-    if (e.target.closest("button") || e.target.closest(".tab")) {
+    // Tab elements handle their own drag; the header handles whole-pane drag.
+    // Buttons (pane controls, tab-close) should never start a drag.
+    if (e.target.closest(".tab") || e.target.closest("button")) {
       e.preventDefault();
       return;
     }
@@ -413,6 +432,26 @@ function renderPaneHeaderElement(pane) {
         }
       });
     });
+    // ---- tab drag source (move tab between panes) -------------------------
+    tabEl.draggable = true;
+    tabEl.addEventListener("dragstart", (e) => {
+      // Prevent the close button from starting a drag.
+      if (e.target.closest(".tab-close")) { e.preventDefault(); return; }
+      // Stop propagation so the header's pane-drag handler doesn't fire too.
+      e.stopPropagation();
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/gently-tab", JSON.stringify({ tabId: tab.id, fromPaneId: pane.id }));
+      try { e.dataTransfer.setDragImage(tabEl, 16, 16); } catch { /* ignore */ }
+      tabEl.classList.add("dragging-tab");
+    });
+    tabEl.addEventListener("dragend", () => {
+      tabEl.classList.remove("dragging-tab");
+      // Defensive cleanup of any lingering drop-target highlights.
+      for (const p of el.workspace.querySelectorAll(".pane.drop-target")) {
+        p.classList.remove("drop-target");
+      }
+    });
+
     tabEl.addEventListener("click", (e) => {
       if (e.target.closest(".tab-close") || e.target.closest(".inline-rename")) return;
       activateTab(pane.id, tab.id);

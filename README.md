@@ -1,5 +1,9 @@
 # Gently
 
+<p align="center">
+  <img src="static/brand/logo.svg" alt="Gently — local agent console" width="400"/>
+</p>
+
 A dashboard for multitasking with AI agents ✨
 
 Monitor and search conversation history across Claude, Codex, Gemini, and OpenCode in one place
@@ -25,6 +29,42 @@ python3 app.py
 Open `http://127.0.0.1:8765`. The TUI dashboard takes the foreground; the HTTP server runs in a background thread. Ctrl+C exits.
 
 Requirements: Python 3.10 or later, plus `tmux` for resume / new-conversation. The browser-side libs (marked, dompurify, highlight.js, xterm) load from a CDN.
+
+### LAN access (phone / tablet)
+
+To reach Gently from another device on the same network, bind to all interfaces:
+
+```bash
+python3 app.py --host 0.0.0.0
+```
+
+Then open `http://<your-machine-ip>:8765` from your phone or tablet. Find your LAN IP with `hostname -I` or `ip addr`.
+
+### Remote access modes
+
+By default, all clients (local or remote) have full access. Use one of these flags to restrict what remote (non-localhost) users can do:
+
+| Flag | What remote users can do |
+| --- | --- |
+| *(none/default)* | Full access, same as `--trust` |
+| `--trust` | Full access (explicit) |
+| `--view-all` | Browse and read all sessions; no terminal interaction or new conversations |
+| `--view-only` | See only the sessions currently open on the host; no terminal interaction |
+
+Remote viewers in read-only modes see a small lock badge in the corner. View-only clients automatically sync their session list from the host every 10 s.
+
+#### Owner authentication
+
+When `--view-only` or `--view-all` is active, Gently generates a persistent owner token (`~/.config/gently/owner.key`) and displays an auth URL in the TUI:
+
+```
+Owner auth — open once in your browser to stay authenticated:
+http://127.0.0.1:8765/?_auth=<token>
+```
+
+Open that URL **once** in the browser you use to run Gently. The server sets a 30-day cookie and redirects to `/` — from then on your browser is recognised as the owner regardless of which IP the connection comes from. This matters on **WSL2**, where Windows' localhost port-forwarding makes your local browser and remote devices appear to arrive from the same gateway IP; the cookie is the only reliable way to tell them apart.
+
+The token survives server restarts. To rotate it, delete `~/.config/gently/owner.key` and restart.
 
 ---
 
@@ -125,7 +165,9 @@ Click anywhere in a pane to focus it. The focused pane has a highlighted border.
 
 Each pane has tabs. Click to activate. Middle-click or the × on the tab to close. Each tab tracks its own scroll position, terminal session, and search query independently.
 
-**Rename a tab:** double-click the tab label to edit it inline. Enter to confirm, Escape to cancel. Also updates the sidebar override for that session.
+**Rename a tab:** double-click the tab label to edit it inline. Enter to confirm, Escape to cancel. Also updates the sidebar override for that session. Custom names persist across page reloads and survive session refreshes.
+
+**Move a tab between panes:** drag a tab from one pane and drop it on another pane — it becomes the active tab there. The source pane reverts to the previously-active tab.
 
 ### Pane control buttons
 
@@ -307,13 +349,14 @@ Override paths with env vars: `CLAUDE_DIR`, `CODEX_DIR`, `GEMINI_DIR`, `OPENCODE
 ```
 python3 app.py [--host HOST] [--port PORT] [--open]
                [--tui | --no-tui] [--tmux-reset]
+               [--view-only | --view-all | --trust]
 ```
 
 `--open` auto-opens the browser. `--tui`/`--no-tui` force the dashboard on or off (default: on if stdout is a TTY). `--tmux-reset` kills every `gently_*` tmux session and cleans up log files, then exits.
 
 ## Limitations
 
-- Single user, localhost only. No remote access, no auth.
+- Single user, LAN-accessible only (no auth, no TLS, use on trusted networks).
 - No editing of past messages. Read-only viewer + launcher.
 - "Load full conversation" is synchronous and may freeze the UI for large sessions.
 - Gemini resume requires the original project folder to still exist on disk.

@@ -8,6 +8,11 @@ import { escapeHtml, relTime, absTime, shortProject, inlineRename } from "./util
 import { addOrActivateTab } from "./render.js";
 import { firstPaneIn, walkPanes } from "./workspace.js";
 
+function closeMobileSidebar() {
+  document.querySelector(".sidebar")?.classList.remove("open");
+  document.getElementById("sidebar-backdrop")?.classList.remove("visible");
+}
+
 export function applyChipState() {
   for (const c of el.chips) {
     const p = c.dataset.provider;
@@ -104,6 +109,7 @@ function buildSessionCard(s) {
     if (e.target.closest(".inline-rename")) return;
     const target = state.workspace.focusedPaneId || firstPaneIn(state.workspace.root).id;
     addOrActivateTab(target, s);
+    closeMobileSidebar();
   });
   return card;
 }
@@ -217,4 +223,5 @@ export function openCursor() {
   if (!s) return;
   const target = state.workspace.focusedPaneId || firstPaneIn(state.workspace.root).id;
   addOrActivateTab(target, s);
+  closeMobileSidebar();
 }

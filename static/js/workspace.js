@@ -78,6 +78,12 @@ export function findParentSplit(root, paneId) {
 
 // ---- persistence ----------------------------------------------------------
 
+// Optional hook called after every persistWorkspace(). Used by the access
+// module to push shared-view updates to the server without creating a
+// circular import.
+let _persistHook = null;
+export function onPersistWorkspace(fn) { _persistHook = fn; }
+
 export function cloneForStorage(node) {
   if (node.type === "pane") {
     return {
@@ -190,6 +196,7 @@ export function persistWorkspace() {
       focusedPaneId: state.workspace.focusedPaneId,
     }));
   } catch { /* quota */ }
+  _persistHook?.();
 }
 
 // ---- runtime teardown helper ----------------------------------------------
@@ -267,6 +274,30 @@ export function swapPanes(idA, idB) {
     });
   }
 
+  persistWorkspace();
+  return true;
+}
+
+/** Move a single tab from one pane to another.
+ *  The moved tab becomes the active tab in the destination pane.
+ *  Returns true on success, false if no move was performed. */
+export function moveTabToPane(fromPaneId, tabId, toPaneId) {
+  if (fromPaneId === toPaneId) return false;
+  const fromPane = findPane(state.workspace.root, fromPaneId);
+  const toPane   = findPane(state.workspace.root, toPaneId);
+  if (!fromPane || !toPane) return false;
+  const tabIdx = fromPane.tabs.findIndex(t => t.id === tabId);
+  if (tabIdx < 0) return false;
+
+  const [tab] = fromPane.tabs.splice(tabIdx, 1);
+  delete fromPane.scrollTopByTabId[tabId];
+  if (fromPane.activeTabId === tabId) {
+    const next = fromPane.tabs[tabIdx] || fromPane.tabs[tabIdx - 1] || null;
+    fromPane.activeTabId = next?.id || null;
+  }
+
+  toPane.tabs.push(tab);
+  toPane.activeTabId = tab.id;
   persistWorkspace();
   return true;
 }

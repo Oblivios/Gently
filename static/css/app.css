@@ -1944,8 +1944,164 @@ details.thinking > .thinking-body {
 }
 .project-group.collapsed .project-group-body { display: none; }
 
-/* tight screens */
-@media (max-width: 860px) {
-  .app { grid-template-columns: 1fr; }
-  .sidebar, .sidebar-resizer { display: none; } /* minimal mobile mode — optional */
+/* hamburger + sidebar backdrop — hidden on desktop */
+.sidebar-toggle { display: none; }
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(7, 11, 22, 0.65);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s ease;
 }
+.sidebar-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ─── mobile (≤ 640px) ─────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  /* ---- viewport: use dvh so address bar + nav bar are accounted for ---- */
+  html, body { height: 100vh; height: 100dvh; }
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 100vh;
+    grid-template-rows: 100dvh;
+    height: 100vh;
+    height: 100dvh;
+  }
+  .sidebar-resizer { display: none; }
+
+  /* ---- sidebar → fixed overlay drawer ---- */
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: min(88vw, 340px);
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform .25s cubic-bezier(.25, .46, .45, .94);
+    box-shadow: 6px 0 28px rgba(0, 0, 0, 0.55);
+    overscroll-behavior: contain;
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-backdrop { display: block; }
+
+  /* ---- hamburger — fixed over top-left of workspace ---- */
+  .sidebar-toggle {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    top: 6px; left: 6px;
+    z-index: 38;
+    width: 36px; height: 36px;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--fg-1);
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    transition: background .12s ease, color .12s ease;
+  }
+  .sidebar-toggle svg { width: 16px; height: 16px; }
+  .sidebar-toggle:active { background: var(--bg-2); color: var(--fg-0); }
+
+  /* ---- pane header: two rows (tabs on top, controls below) ----
+     Row 1: 44 px left gap (hamburger clearance) + tab strip
+     Row 2: full-width scrollable controls strip                 */
+  .pane-header {
+    flex-wrap: wrap;
+    align-content: flex-start;
+    padding: 0 4px;
+    min-height: auto;
+    cursor: default;   /* avoid accidental drag-to-swap on touch */
+  }
+  .tab-strip {
+    /* fills row 1 minus the 44 px hamburger margin */
+    flex: 0 0 calc(100% - 44px);
+    margin-left: 44px;
+    min-width: 0;
+    padding-top: 4px;
+    padding-bottom: 0;
+  }
+  .pane-controls {
+    /* fills row 2 entirely, scrolls if buttons overflow */
+    flex: 0 0 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    border-top: 1px solid var(--line);
+    padding: 3px 0 4px 0;
+    gap: 1px;
+  }
+  .pane-controls::-webkit-scrollbar { display: none; }
+
+  /* ---- tap targets ---- */
+  .pane-btn { width: 32px; height: 32px; }
+  .chip { padding: 9px 10px; min-height: 36px; }
+  .session-card { padding: 14px 12px 14px 16px; }
+  .tab { padding: 6px 6px 6px 10px; }
+  .tab .tab-close { width: 26px; height: 26px; font-size: 16px; }
+  .new-conv-btn { padding: 10px 12px; }
+  .pane-terminal-btn { height: 30px; padding: 0 10px; }
+
+  /* ---- messages: use more of the available width ---- */
+  .msg { width: calc(100% - 16px); }
+
+  /* ---- workspaces popover: wider on small screens ---- */
+  .workspaces-popover { left: 8px; right: 8px; bottom: 52px; }
+}
+
+/* ─── access control ────────────────────────────────────────────────────── */
+
+/* Read-only access banner — fixed badge in top-right of workspace */
+.access-banner {
+  position: fixed;
+  top: 8px;
+  right: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  pointer-events: none;
+  user-select: none;
+  backdrop-filter: blur(4px);
+}
+.access-banner[hidden] { display: none; }
+.access-banner svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* Elements always hidden in read-only modes */
+body.access-readonly .new-conv-btn,
+body.access-readonly .pane-btn[data-action="toggle-terminal"],
+body.access-readonly .pane-btn[data-action="open-code"],
+body.access-readonly #reset-layout-btn { display: none; }
+
+/* Pane headers not draggable in read-only (no reason to swap panes) */
+body.access-readonly .pane-header { cursor: default; }
+
+/* View-only: also hide the workspaces button (no named workspaces for viewers) */
+body.access-viewonly #workspaces-btn { display: none; }
+
+/* Mobile: push banner below hamburger button on narrow screens */
+@media (max-width: 640px) {
+  .access-banner { top: auto; bottom: 14px; right: 10px; }
+}
+
+/* ---- tab drag-between-panes -----------------------------------------------
+   The tab being dragged gets a low opacity so the user can see through it
+   to the drop zone underneath. The cursor changes while in flight.
+   Drop targets are highlighted via .drop-target (already shared with pane swap). */
+.tab.dragging-tab {
+  opacity: 0.35;
+  cursor: grabbing;
+}
+.tab[draggable="true"] { cursor: grab; }

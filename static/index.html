@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Gently</title>
+<link rel="icon" type="image/svg+xml" href="/static/brand/icon-32.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -12,6 +13,10 @@
 <link rel="stylesheet" href="/static/css/app.css" />
 </head>
 <body>
+<button id="sidebar-toggle" class="sidebar-toggle" aria-label="Toggle sidebar" title="Open sidebar">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+</button>
+<div id="sidebar-backdrop" class="sidebar-backdrop"></div>
 <div class="app">
   <aside class="sidebar">
     <header class="brand">
@@ -172,6 +177,14 @@
       <button class="btn btn-primary" id="new-conv-start" type="button" disabled>Start</button>
     </footer>
   </div>
+</div>
+
+<div id="access-banner" class="access-banner" hidden>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+  </svg>
+  <span class="access-banner-text"></span>
 </div>
 
 <div class="toast" id="toast" aria-live="polite"></div>

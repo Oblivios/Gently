@@ -8,7 +8,7 @@ import {
 } from "./state.js";
 import { escapeHtml } from "./util.js";
 import {
-  makePane, walkPanes, loadWorkspaceFromStorage,
+  makePane, walkPanes, loadWorkspaceFromStorage, onPersistWorkspace,
 } from "./workspace.js";
 import {
   renderWorkspace, resetLayout,
@@ -26,6 +26,7 @@ import {
 import "./newconv.js";
 // Side-effect import: wires up the Ctrl+K command palette.
 import "./palette.js";
+import { fetchAccessLevel, applyAccessRestrictions, scheduleSyncSharedView, isViewOnly } from "./access.js";
 
 // ---- filter chips --------------------------------------------------------
 
@@ -231,7 +232,45 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+// ---- mobile sidebar toggle -----------------------------------------------
+
+const _sidebarEl      = document.querySelector(".sidebar");
+const _sidebarToggle  = document.getElementById("sidebar-toggle");
+const _sidebarBackdrop = document.getElementById("sidebar-backdrop");
+
+function closeMobileSidebar() {
+  _sidebarEl?.classList.remove("open");
+  _sidebarBackdrop?.classList.remove("visible");
+}
+
+function openMobileSidebar() {
+  _sidebarEl?.classList.add("open");
+  _sidebarBackdrop?.classList.add("visible");
+}
+
+_sidebarToggle?.addEventListener("click", () => {
+  if (_sidebarEl?.classList.contains("open")) closeMobileSidebar();
+  else openMobileSidebar();
+});
+_sidebarBackdrop?.addEventListener("click", closeMobileSidebar);
+
 // ---- boot ----------------------------------------------------------------
+
+// Fetch access level before rendering so restrictions are applied from
+// the first paint. Top-level await is fine in ES modules (Chrome 89+,
+// Firefox 89+, Safari 15+).
+try { await fetchAccessLevel(); } catch { /* fallback to "owner" */ }
+applyAccessRestrictions();
+
+// Owner: push workspace snapshot to server on every change so view-only
+// clients know which sessions are currently open.
+onPersistWorkspace(() => scheduleSyncSharedView());
+
+// View-only: re-poll session list every 10 s so the sidebar stays in sync
+// with what the owner currently has open (server filters the list for us).
+if (isViewOnly()) {
+  setInterval(() => fetchSessions(state.query).catch(() => {}), 10000);
+}
 
 applyChipState();
 

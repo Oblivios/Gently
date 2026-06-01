@@ -54,25 +54,30 @@ _SNAPSHOT = UsageSnapshot()
 # Key → label. Anything unknown is surfaced verbatim so we don't hide new
 # buckets Anthropic ships in the future.
 _LABELS = {
-    "five_hour":             "5-hour limit",
-    "seven_day":             "Weekly · all models",
-    # Anthropic has renamed the "Claude Design" bucket at least twice (seen
-    # as `seven_day_oauth_apps`, `iguana_necktie`, `seven_day_omelette`).
-    # Map all known codenames to the same display label.
-    "seven_day_oauth_apps":  "Weekly · Claude Design",
-    "iguana_necktie":        "Weekly · Claude Design",
-    "seven_day_omelette":    "Weekly · Claude Design",
-    "seven_day_opus":        "Opus only",
-    "seven_day_sonnet":      "Sonnet only",
-    "extra_usage":           "Extra usage",
+    "five_hour":              "5-hour limit",
+    "seven_day":              "Weekly · all models",
+    # Anthropic has renamed the "Claude Code" app-specific weekly bucket
+    # several times. Map all known codenames to the same display label.
+    "seven_day_oauth_apps":   "Weekly · Claude Code",
+    "seven_day_cowork":       "Weekly · Claude Code",
+    "iguana_necktie":         "Weekly · Claude Code",
+    "seven_day_omelette":     "Weekly · Claude Code",
+    "omelette_promotional":   "Weekly · Claude Code",
+    "tangelo":                "Weekly · Claude Code",
+    "seven_day_opus":         "Opus only",
+    "seven_day_sonnet":       "Sonnet only",
+    "extra_usage":            "Extra usage",
 }
 # Preferred order for known buckets; unknowns are appended after.
 _ORDER = [
     "five_hour",
     "seven_day",
     "seven_day_oauth_apps",
+    "seven_day_cowork",
     "iguana_necktie",
     "seven_day_omelette",
+    "omelette_promotional",
+    "tangelo",
     "seven_day_sonnet",
     "seven_day_opus",
     "extra_usage",
@@ -133,10 +138,9 @@ def _to_bucket(key: str, val: dict[str, Any]) -> UsageBucket:
     )
 
 
-def _fetch() -> tuple[list[UsageBucket], str]:
-    token = _read_token()
-    if not token:
-        return [], f"no token at {_CREDS_PATH}"
+def _do_request(token: str) -> tuple[dict | None, str]:
+    """Make a single usage API call. Returns (data_dict, "") on success or
+    (None, error_string) on failure."""
     req = urllib.request.Request(_USAGE_URL, headers={
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
@@ -146,16 +150,38 @@ def _fetch() -> tuple[list[UsageBucket], str]:
     })
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
+            return json.loads(r.read()), ""
     except urllib.error.HTTPError as e:
         body = ""
         try:
-            body = e.read().decode("utf-8", errors="replace")[:80]
+            body = e.read().decode("utf-8", errors="replace")[:120]
         except Exception:
             pass
-        return [], f"HTTP {e.code}" + (f" — {body}" if body else "")
+        return None, (e.code, body)
     except Exception as e:
-        return [], f"{type(e).__name__}: {e}"[:120]
+        return None, (0, f"{type(e).__name__}: {e}"[:120])
+
+
+def _fetch() -> tuple[list[UsageBucket], str]:
+    token = _read_token()
+    if not token:
+        return [], f"no token at {_CREDS_PATH}"
+
+    data, err = _do_request(token)
+
+    # On 401 the access token may have been rotated by Claude Code while we
+    # were running. Re-read the credentials file and retry once with the
+    # potentially-refreshed token before giving up.
+    if data is None and isinstance(err, tuple) and err[0] == 401:
+        fresh = _read_token()
+        if fresh and fresh != token:
+            data, err = _do_request(fresh)
+
+    if data is None:
+        code, body = err if isinstance(err, tuple) else (0, str(err))
+        if code == 401:
+            return [], "Token expired — run claude once to refresh credentials, then press R"
+        return [], f"HTTP {code} — {body}" if code else str(body)
 
     if not isinstance(data, dict):
         return [], "unexpected response shape"

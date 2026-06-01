@@ -110,7 +110,7 @@ def _provider_stats(name: str) -> tuple[int, int, float, bool]:
 
 # ---- frame construction ----------------------------------------------------
 
-def _build_frame(url: str, width: int) -> list[str]:
+def _build_frame(url: str, width: int, auth_url: str | None = None) -> list[str]:
     """Return a list of already-ANSI-formatted lines. One list entry per
     terminal row. Width is used only for the horizontal rules."""
     lines: list[str] = []
@@ -122,6 +122,11 @@ def _build_frame(url: str, width: int) -> list[str]:
         f"  {_CYAN}{url}{_RESET}  "
         f"{_DIM}· uptime {_uptime(uptime_seconds())}{_RESET}"
     )
+    if auth_url:
+        lines.append(
+            f"  {_YELLOW}Owner auth{_RESET}{_DIM} — open once in your browser to stay authenticated:{_RESET}"
+        )
+        lines.append(f"  {_CYAN}{auth_url}{_RESET}")
     lines.append(f"{_DIM}{'─' * w}{_RESET}")
 
     # Per-provider block
@@ -254,9 +259,9 @@ def _build_frame(url: str, width: int) -> list[str]:
 
 # ---- loop ------------------------------------------------------------------
 
-def _draw(url: str, prev_line_count: int) -> int:
+def _draw(url: str, prev_line_count: int, auth_url: str | None = None) -> int:
     width, height = _term_size()
-    lines = _build_frame(url, width)
+    lines = _build_frame(url, width, auth_url=auth_url)
     out = [_HOME]
     for line in lines:
         out.append(_CLREOL)
@@ -321,12 +326,15 @@ def _read_key() -> str | None:
         return None
 
 
-def run(url: str, refresh_s: float = 2.0) -> None:
+def run(url: str, refresh_s: float = 2.0, auth_url: str | None = None) -> None:
     """Blocking TUI loop. Returns on KeyboardInterrupt.
 
     Draws on a timer, but polls stdin every 100ms so [R] is responsive.
     Claude usage is fetched once at boot and then only on explicit [R]
     keypress — no background timer for that panel.
+
+    auth_url, if given, is shown in the header so the operator can
+    authenticate their browser after starting with --view-only / --view-all.
     """
     prev = 0
     old_tty = _enter_cbreak()
@@ -351,7 +359,7 @@ def run(url: str, refresh_s: float = 2.0) -> None:
         while True:
             now = time.time()
             if now - last_draw >= refresh_s:
-                prev = _draw(url, prev)
+                prev = _draw(url, prev, auth_url=auth_url)
                 last_draw = now
 
             ch = _read_key()
@@ -362,7 +370,7 @@ def run(url: str, refresh_s: float = 2.0) -> None:
                 claude_usage.refresh(blocking=False)
                 # Force an immediate redraw so the "refreshing…" state
                 # shows up without waiting for the next 2s tick.
-                prev = _draw(url, prev)
+                prev = _draw(url, prev, auth_url=auth_url)
                 last_draw = time.time()
 
             # Sleep in small chunks so keypresses stay responsive without
